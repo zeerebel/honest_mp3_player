@@ -72,6 +72,16 @@
   .cfmp-btn-prev svg, .cfmp-btn-next svg { width : 22px; height : 22px; }
   .cfmp-btn-play svg { width : 30px; height : 30px; }
 
+  .cfmp-cur-inline {
+    color          : var(--cfmp-subtext);
+    font-size      : 12px;
+    letter-spacing : 0.05em;
+    font-variant-numeric : tabular-nums;
+    text-shadow    : 0 1px 4px rgba(0,0,0,0.35);
+    min-width      : 36px;
+    text-align     : left;
+  }
+
   .cfmp-scrubber {
     position    : relative;
     height      : 24px;
@@ -114,7 +124,7 @@
   .cfmp-time {
     display : flex;
     align-items : center;
-    justify-content : space-between;
+    justify-content : flex-end;
     color : var(--cfmp-subtext);
     font-size : 12px;
     letter-spacing : 0.05em;
@@ -157,7 +167,7 @@
     left     : 50%;
     transform: translateX(-50%) translateY(8px) scale(0.92);
     transform-origin: bottom center;
-    background: rgba(28, 22, 40, 0.92);
+    background: rgba(0, 0, 0, 0.5);
     border   : 1px solid rgba(255,255,255,0.10);
     border-radius : 14px;
     padding  : 16px 0 14px;
@@ -186,7 +196,7 @@
     left    : 50%;
     transform : translateX(-50%);
     border  : 6px solid transparent;
-    border-top-color : rgba(28, 22, 40, 0.92);
+    border-top-color : rgba(0, 0, 0, 0.5);
   }
 
   .cfmp-vol-pct {
@@ -248,8 +258,9 @@
         <svg viewBox="0 0 24 24" id="cfmp-play-svg"><path d="M8 5v14l11-7z"></path></svg>
       </button>
       <button class="cfmp-btn cfmp-btn-next" id="cfmp-next" aria-label="Next">
-        <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zm8.5-6L23 6v12z"></path></svg>
+        <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6h2v12h-2z"></path></svg>
       </button>
+      <span class="cfmp-cur-inline" id="cfmp-cur">0:00</span>
     </div>
 
     <div class="cfmp-scrubber" id="cfmp-scrubber">
@@ -260,7 +271,6 @@
     </div>
 
     <div class="cfmp-time">
-      <span id="cfmp-cur">0:00</span>
       <div class="cfmp-time-right">
         <span id="cfmp-dur">0:00</span>
         <div class="cfmp-vol-wrap">
