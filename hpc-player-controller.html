@@ -363,6 +363,56 @@
     var lastVol      = 0.8;
     var autoplayDone = false;
 
+    // sessionStorage fallback — restores position if the audio element was
+    // re-created by a full page reload (i.e. Ajax page transitions off, or
+    // user opened a fresh tab on the same session).
+    var STORAGE_POS     = 'hpc-pos';
+    var STORAGE_PLAYING = 'hpc-playing';
+    var STORAGE_VOL     = 'hpc-volume';
+    var lastSavedAt     = 0;
+    var savedPlayingFlag = null;
+
+    function readStorage(key) {
+      try { return sessionStorage.getItem(key); } catch (e) { return null; }
+    }
+    function writeStorage(key, val) {
+      try { sessionStorage.setItem(key, val); } catch (e) {}
+    }
+    function savePos(force) {
+      var now = Date.now();
+      if (!force && now - lastSavedAt < 1000) return;
+      lastSavedAt = now;
+      writeStorage(STORAGE_POS, String(audio.currentTime || 0));
+      writeStorage(STORAGE_PLAYING, audio.paused ? '0' : '1');
+    }
+    function restoreFromStorage() {
+      var sp = readStorage(STORAGE_PLAYING);
+      if (sp === '1') savedPlayingFlag = true;
+      else if (sp === '0') savedPlayingFlag = false;
+
+      var savedVol = parseFloat(readStorage(STORAGE_VOL));
+      if (!isNaN(savedVol) && savedVol >= 0 && savedVol <= 1) {
+        audio.volume = savedVol;
+        audio.muted  = (savedVol === 0);
+      } else if (audio.currentTime < 0.5) {
+        audio.volume = 0.8;
+      }
+
+      var savedPos = parseFloat(readStorage(STORAGE_POS));
+      if (isNaN(savedPos) || savedPos <= 0) return;
+      // Only restore if this is a fresh element — if audio is mid-playback
+      // (Ajax transitions kept it alive) leave currentTime alone.
+      if (audio.currentTime > 0.5) return;
+      var doSeek = function () {
+        if (audio.duration && savedPos < audio.duration - 1) {
+          audio.currentTime = savedPos;
+        }
+      };
+      if (audio.readyState >= 1) doSeek();
+      else audio.addEventListener('loadedmetadata', doSeek, { once: true });
+    }
+    restoreFromStorage();
+
     function seekFromX(x) {
       var t = scrubber.querySelector('.cfmp-track');
       var r = t.getBoundingClientRect();
@@ -374,6 +424,7 @@
       audio.volume = v / 100;
       audio.muted  = (v === 0);
       setVolumeUI(v);
+      writeStorage(STORAGE_VOL, String(v / 100));
     }
     function setVolumeFromY(y) {
       var t = volScrubber.querySelector('.cfmp-vol-track');
@@ -439,15 +490,18 @@
       if (!audio.duration) return;
       setProgress((audio.currentTime / audio.duration) * 100);
       curEl.textContent = formatTime(audio.currentTime);
+      savePos(false);
     });
     audio.addEventListener('ended', function () {
       isPlaying = false;
       playSvg.innerHTML = PLAY_PATH;
       setProgress(0);
       curEl.textContent = '0:00';
+      writeStorage(STORAGE_POS, '0');
+      writeStorage(STORAGE_PLAYING, '0');
     });
-    audio.addEventListener('play',  function () { isPlaying = true;  playSvg.innerHTML = PAUSE_PATH; });
-    audio.addEventListener('pause', function () { isPlaying = false; playSvg.innerHTML = PLAY_PATH;  });
+    audio.addEventListener('play',  function () { isPlaying = true;  playSvg.innerHTML = PAUSE_PATH; savePos(true); });
+    audio.addEventListener('pause', function () { isPlaying = false; playSvg.innerHTML = PLAY_PATH;  savePos(true); });
     audio.addEventListener('volumechange', function () {
       setVolumeUI(audio.muted ? 0 : audio.volume * 100);
     });
@@ -497,10 +551,17 @@
       window.addEventListener(evt, startOnInteraction, { capture: true, passive: true });
     });
 
-    if (!isPlaying) {
+    // If the user explicitly paused on a previous page, don't auto-resume
+    // here. Otherwise attempt autoplay (will fall back to first user
+    // interaction on browsers that block it, e.g. iOS Safari).
+    if (savedPlayingFlag === false) {
+      autoplayDone = true;
+    } else if (!isPlaying) {
       if (audio.readyState >= 2) tryAutoplay();
       else audio.addEventListener('canplay', tryAutoplay, { once: true });
     }
+
+    window.addEventListener('pagehide', function () { savePos(true); });
   }
 })();
 </script>
