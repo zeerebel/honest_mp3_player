@@ -569,22 +569,28 @@
 
     function tryAutoplay() {
       if (autoplayDone) return;
-      // Always start MUTED. Browsers grant muted autoplay unconditionally,
-      // so behavior is consistent across fresh visits AND refreshes — no
-      // dependence on Chrome's MEI. The first user interaction (mousemove,
-      // scroll, wheel, click, tap, keypress) unmutes the already-playing
-      // stream, which needs no gesture.
-      if (audio.volume > 0) { autoMuted = true; audio.muted = true; }
+      // Try UNMUTED first — matches the original behavior. Browsers with
+      // sufficient Media Engagement Index (Chrome's MEI) or other autoplay
+      // permission will grant this and the visitor hears sound immediately
+      // on page load and on refresh. This is the case for anyone who has
+      // played media on the domain before.
       var p = audio.play();
       if (!p || typeof p.then !== 'function') { autoplayDone = true; return; }
       p.then(function () {
         autoplayDone = true;
       }).catch(function () {
-        // Even muted autoplay rejected (iOS Low Power Mode, locked-down
-        // policy, etc.). Drop the auto-mute so startOnInteraction can do a
-        // direct play() on the next gesture.
-        autoMuted = false;
-        audio.muted = (audio.volume === 0);
+        // Unmuted autoplay blocked — first-time visitor with no MEI, or a
+        // strict policy. Retry MUTED (always permitted) so audio is at least
+        // playing silently; first interaction unmutes it.
+        if (audio.volume > 0) { autoMuted = true; audio.muted = true; }
+        var p2 = audio.play();
+        if (p2 && typeof p2.then === 'function') {
+          p2.then(function () { autoplayDone = true; })
+            .catch(function () {
+              autoMuted = false;
+              audio.muted = (audio.volume === 0);
+            });
+        }
       });
     }
     function startOnInteraction() {
