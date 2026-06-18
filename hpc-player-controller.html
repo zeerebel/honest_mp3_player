@@ -364,6 +364,24 @@
     var autoplayDone = false;
     var autoMuted    = false; // true when muted ONLY to satisfy autoplay policy
 
+    // Salient's AJAX navigation keeps #hpc-global, document and window alive
+    // across page changes, so a previous page's controller would leave its
+    // listeners on them. Remove that instance's listeners before binding
+    // ours, and register everything through on() so we can be cleaned up too.
+    if (typeof audio.__hpcCleanup === 'function') { audio.__hpcCleanup(); }
+    var registry = [];
+    function on(target, evt, fn, opts) {
+      target.addEventListener(evt, fn, opts);
+      registry.push([target, evt, fn, opts]);
+    }
+    audio.__hpcCleanup = function () {
+      for (var i = 0; i < registry.length; i++) {
+        var r = registry[i];
+        try { r[0].removeEventListener(r[1], r[2], r[3]); } catch (e) {}
+      }
+      registry = [];
+    };
+
     // sessionStorage fallback — restores position if the audio element was
     // re-created by a full page reload (i.e. Ajax page transitions off, or
     // user opened a fresh tab on the same session).
@@ -410,7 +428,7 @@
         }
       };
       if (audio.readyState >= 1) doSeek();
-      else audio.addEventListener('loadedmetadata', doSeek, { once: true });
+      else on(audio, 'loadedmetadata', doSeek, { once: true });
     }
     restoreFromStorage();
 
@@ -474,41 +492,41 @@
       else openVol();
     }
 
-    volBtn.addEventListener('click', function (e) {
+    on(volBtn, 'click', function (e) {
       e.stopPropagation();
       toggleVol();
     });
-    volPop.addEventListener('click', function (e) { e.stopPropagation(); });
-    document.addEventListener('click', function () { closeVol(); });
+    on(volPop, 'click', function (e) { e.stopPropagation(); });
+    on(document, 'click', function () { closeVol(); });
 
-    volScrubber.addEventListener('mousedown', function (e) {
+    on(volScrubber, 'mousedown', function (e) {
       e.stopPropagation();
       draggingVol = true;
       setVolumeFromY(e.clientY);
     });
-    document.addEventListener('mousemove', function (e) {
+    on(document, 'mousemove', function (e) {
       if (draggingVol) setVolumeFromY(e.clientY);
     });
-    document.addEventListener('mouseup', function () { draggingVol = false; });
+    on(document, 'mouseup', function () { draggingVol = false; });
 
-    volScrubber.addEventListener('touchstart', function (e) {
+    on(volScrubber, 'touchstart', function (e) {
       setVolumeFromY(e.touches[0].clientY);
     }, { passive: true });
-    volScrubber.addEventListener('touchmove', function (e) {
+    on(volScrubber, 'touchmove', function (e) {
       e.preventDefault();
       setVolumeFromY(e.touches[0].clientY);
     }, { passive: false });
 
-    audio.addEventListener('loadedmetadata', function () {
+    on(audio, 'loadedmetadata', function () {
       durEl.textContent = formatTime(audio.duration);
     });
-    audio.addEventListener('timeupdate', function () {
+    on(audio, 'timeupdate', function () {
       if (!audio.duration) return;
       setProgress((audio.currentTime / audio.duration) * 100);
       curEl.textContent = formatTime(audio.currentTime);
       savePos(false);
     });
-    audio.addEventListener('ended', function () {
+    on(audio, 'ended', function () {
       isPlaying = false;
       playSvg.innerHTML = PLAY_PATH;
       setProgress(0);
@@ -516,36 +534,36 @@
       writeStorage(STORAGE_POS, '0');
       writeStorage(STORAGE_PLAYING, '0');
     });
-    audio.addEventListener('play',  function () { isPlaying = true;  playSvg.innerHTML = PAUSE_PATH; savePos(true); });
-    audio.addEventListener('pause', function () { isPlaying = false; playSvg.innerHTML = PLAY_PATH;  savePos(true); });
-    audio.addEventListener('volumechange', function () {
+    on(audio, 'play',  function () { isPlaying = true;  playSvg.innerHTML = PAUSE_PATH; savePos(true); });
+    on(audio, 'pause', function () { isPlaying = false; playSvg.innerHTML = PLAY_PATH;  savePos(true); });
+    on(audio, 'volumechange', function () {
       var displayMuted = audio.muted && !autoMuted;
       setVolumeUI(displayMuted ? 0 : audio.volume * 100);
     });
 
-    playBtn.addEventListener('click', function () {
+    on(playBtn, 'click', function () {
       if (isPlaying) audio.pause();
       else           audio.play();
     });
-    prevBtn.addEventListener('click', function () {
+    on(prevBtn, 'click', function () {
       audio.currentTime = 0;
       if (!isPlaying) audio.play();
     });
-    nextBtn.addEventListener('click', function () {
+    on(nextBtn, 'click', function () {
       if (audio.duration) audio.currentTime = audio.duration;
     });
 
-    scrubber.addEventListener('mousedown', function (e) {
+    on(scrubber, 'mousedown', function (e) {
       dragging = true; seekFromX(e.clientX);
     });
-    document.addEventListener('mousemove', function (e) {
+    on(document, 'mousemove', function (e) {
       if (dragging) seekFromX(e.clientX);
     });
-    document.addEventListener('mouseup', function () { dragging = false; });
-    scrubber.addEventListener('touchstart', function (e) {
+    on(document, 'mouseup', function () { dragging = false; });
+    on(scrubber, 'touchstart', function (e) {
       seekFromX(e.touches[0].clientX);
     }, { passive: true });
-    scrubber.addEventListener('touchmove', function (e) {
+    on(scrubber, 'touchmove', function (e) {
       e.preventDefault(); seekFromX(e.touches[0].clientX);
     }, { passive: false });
 
@@ -578,18 +596,22 @@
         if (p && typeof p.catch === 'function') p.catch(function () {});
       }
     }
+    // pointerdown + keydown are the dependable cross-browser activation
+    // signals; touchstart covers older iOS; scroll/wheel/mousemove are
+    // supplements that unmute the already-playing (muted) stream — that
+    // doesn't need a true activation gesture, so they work here.
     ['click','touchstart','pointerdown','keydown','scroll','wheel','mousemove'].forEach(function (evt) {
-      window.addEventListener(evt, startOnInteraction, { capture: true, passive: true });
+      on(window, evt, startOnInteraction, { capture: true, passive: true });
     });
 
     // Always attempt autoplay on attach — original behavior. Browsers that
     // block it (iOS Safari especially) fall through to startOnInteraction.
     if (!isPlaying) {
       if (audio.readyState >= 2) tryAutoplay();
-      else audio.addEventListener('canplay', tryAutoplay, { once: true });
+      else on(audio, 'canplay', tryAutoplay, { once: true });
     }
 
-    window.addEventListener('pagehide', function () { savePos(true); });
+    on(window, 'pagehide', function () { savePos(true); });
   }
 })();
 </script>
