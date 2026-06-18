@@ -551,12 +551,9 @@
       window.addEventListener(evt, startOnInteraction, { capture: true, passive: true });
     });
 
-    // If the user explicitly paused on a previous page, don't auto-resume
-    // here. Otherwise attempt autoplay (will fall back to first user
-    // interaction on browsers that block it, e.g. iOS Safari).
-    if (savedPlayingFlag === false) {
-      autoplayDone = true;
-    } else if (!isPlaying) {
+    // Always attempt autoplay on attach — original behavior. Browsers that
+    // block it (iOS Safari especially) fall through to startOnInteraction.
+    if (!isPlaying) {
       if (audio.readyState >= 2) tryAutoplay();
       else audio.addEventListener('canplay', tryAutoplay, { once: true });
     }
