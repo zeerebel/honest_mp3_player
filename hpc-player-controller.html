@@ -362,6 +362,7 @@
     var draggingVol  = false;
     var lastVol      = 0.8;
     var autoplayDone = false;
+    var autoMuted    = false; // true when muted ONLY to satisfy autoplay policy
 
     // sessionStorage fallback — restores position if the audio element was
     // re-created by a full page reload (i.e. Ajax page transitions off, or
@@ -423,8 +424,17 @@
       var v = Math.max(0, Math.min(100, Math.round(pct)));
       audio.volume = v / 100;
       audio.muted  = (v === 0);
+      autoMuted    = false; // explicit volume action cancels auto-mute
       setVolumeUI(v);
       writeStorage(STORAGE_VOL, String(v / 100));
+    }
+    // Unmute the autoplay-muted stream on first interaction. Unmuting an
+    // already-playing element does NOT require a user gesture, so this works
+    // on mousemove/scroll where starting playback would not.
+    function unmuteIfNeeded() {
+      if (!autoMuted) return;
+      autoMuted = false;
+      audio.muted = (audio.volume === 0);
     }
     function setVolumeFromY(y) {
       var t = volScrubber.querySelector('.cfmp-vol-track');
@@ -438,16 +448,22 @@
     // Sync UI to current audio state immediately — playback may already be
     // running from a previous page.
     function syncFromAudio() {
+      isPlaying = !audio.paused && !audio.ended;
+      if (isPlaying) autoplayDone = true;
+      // Inherited an auto-muted stream from a previous page (playing + muted
+      // but intended volume > 0). Mark it so the next interaction unmutes.
+      if (isPlaying && audio.muted && audio.volume > 0) autoMuted = true;
+
       var vol = (typeof audio.volume === 'number') ? audio.volume : 0.8;
-      applyVolume(audio.muted ? 0 : vol * 100);
+      var displayMuted = audio.muted && !autoMuted; // auto-mute isn't "muted" to the user
+      setVolumeUI(displayMuted ? 0 : vol * 100);
+
       if (audio.duration) {
         durEl.textContent = formatTime(audio.duration);
         setProgress((audio.currentTime / audio.duration) * 100);
       }
       curEl.textContent = formatTime(audio.currentTime || 0);
-      isPlaying = !audio.paused && !audio.ended;
       playSvg.innerHTML = isPlaying ? PAUSE_PATH : PLAY_PATH;
-      if (isPlaying) autoplayDone = true;
     }
     syncFromAudio();
 
@@ -503,7 +519,8 @@
     audio.addEventListener('play',  function () { isPlaying = true;  playSvg.innerHTML = PAUSE_PATH; savePos(true); });
     audio.addEventListener('pause', function () { isPlaying = false; playSvg.innerHTML = PLAY_PATH;  savePos(true); });
     audio.addEventListener('volumechange', function () {
-      setVolumeUI(audio.muted ? 0 : audio.volume * 100);
+      var displayMuted = audio.muted && !autoMuted;
+      setVolumeUI(displayMuted ? 0 : audio.volume * 100);
     });
 
     playBtn.addEventListener('click', function () {
@@ -535,19 +552,30 @@
     function tryAutoplay() {
       if (autoplayDone) return;
       var p = audio.play();
-      if (p && typeof p.then === 'function') {
-        p.then(function () { autoplayDone = true; })
-         .catch(function () {});
-      } else {
-        autoplayDone = true;
-      }
+      if (!p || typeof p.then !== 'function') { autoplayDone = true; return; }
+      p.then(function () {
+        autoplayDone = true; // unmuted autoplay was allowed (e.g. Chrome MEI)
+      }).catch(function () {
+        // Unmuted autoplay blocked. Retry MUTED — browsers always permit
+        // muted autoplay. Sound comes in on the first interaction (unmute).
+        if (audio.volume > 0) { autoMuted = true; audio.muted = true; }
+        var p2 = audio.play();
+        if (p2 && typeof p2.then === 'function') {
+          p2.then(function () { autoplayDone = true; })
+            .catch(function () { autoMuted = false; audio.muted = (audio.volume === 0); });
+        }
+      });
     }
     function startOnInteraction() {
-      if (autoplayDone) return;
-      autoplayDone = true;
-      audio.play().catch(function(){});
+      if (autoplayDone && !autoMuted) return; // fully started + audible
+      unmuteIfNeeded();
+      if (!autoplayDone) {
+        autoplayDone = true;
+        var p = audio.play();
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+      }
     }
-    ['click','touchstart','keydown','scroll','mousemove'].forEach(function (evt) {
+    ['click','touchstart','pointerdown','keydown','scroll','wheel','mousemove'].forEach(function (evt) {
       window.addEventListener(evt, startOnInteraction, { capture: true, passive: true });
     });
 
