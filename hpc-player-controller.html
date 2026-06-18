@@ -1,9 +1,9 @@
 <!-- ==================================================
-     CF MUSIC PLAYER mp3_v4 — Controller
-     - Controls the global #hpc-global <audio> element (rendered in wp_footer)
-     - No <audio> tag here; this is UI + JS only
-     - Waits for #hpc-global to exist before attaching
-     - Syncs UI to current playback state on every page load
+     CF MUSIC PLAYER mp3_v4 — Controller (UI only)
+     - Binds to the persistent window.hpcAudio engine (created in wp_footer)
+     - No <audio> tag; no autoplay/position logic here (the engine owns that)
+     - Waits for window.hpcAudio, then maps this page's controls to it and
+       syncs the UI to the live playback state
      ================================================== -->
 <style>
   .cfmp-root {
@@ -324,12 +324,13 @@
   var VOL_LOW  = '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/>';
   var VOL_MUTE = '<path d="M16.5 12A4.5 4.5 0 0 0 14 8v2.18l2.45 2.45c.03-.2.05-.41.05-.63zM19 12c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.93 8.93 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.17v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73 12 10.73 4.27 3zM12 4 9.91 6.09 12 8.18V4z"/>';
 
+  var STORAGE_VOL = 'hpc-volume';
+
   function formatTime(s) {
     if (isNaN(s) || !isFinite(s)) return '0:00';
     var m = Math.floor(s / 60), sec = Math.floor(s % 60);
     return m + ':' + (sec < 10 ? '0' : '') + sec;
   }
-
   function setProgress(pct) {
     fill.style.width  = pct + '%';
     handle.style.left = pct + '%';
@@ -343,94 +344,39 @@
     else               volSvg.innerHTML = VOL_HIGH;
   }
 
-  // Wait for the global audio element rendered by wp_footer.
+  // Wait for the persistent engine (window.hpcAudio) created in wp_footer.
   var attempts = 0;
   var poll = setInterval(function () {
-    var audio = document.getElementById('hpc-global');
-    attempts++;
-    if (audio) {
+    if (window.hpcAudio) {
       clearInterval(poll);
-      attach(audio);
-    } else if (attempts >= 20) {
+      attach(window.hpcAudio);
+    } else if (++attempts >= 40) {
       clearInterval(poll);
     }
   }, 50);
 
   function attach(audio) {
-    var isPlaying    = false;
-    var dragging     = false;
-    var draggingVol  = false;
-    var lastVol      = 0.8;
-    var autoplayDone = false;
-    var autoMuted    = false; // true when muted ONLY to satisfy autoplay policy
+    var dragging    = false;
+    var draggingVol = false;
+    var lastVol     = 0.8;
 
-    // Salient's AJAX navigation keeps #hpc-global, document and window alive
-    // across page changes, so a previous page's controller would leave its
-    // listeners on them. Remove that instance's listeners before binding
-    // ours, and register everything through on() so we can be cleaned up too.
-    if (typeof audio.__hpcCleanup === 'function') { audio.__hpcCleanup(); }
+    // The controller re-runs on every page that has the shortcode and binds
+    // to the SAME persistent window.hpcAudio. Remove the previous page's UI
+    // listeners (left on the audio object / document) before binding ours,
+    // so handlers don't accumulate across navigations.
+    if (typeof audio.__hpcUICleanup === 'function') { audio.__hpcUICleanup(); }
     var registry = [];
     function on(target, evt, fn, opts) {
       target.addEventListener(evt, fn, opts);
       registry.push([target, evt, fn, opts]);
     }
-    audio.__hpcCleanup = function () {
+    audio.__hpcUICleanup = function () {
       for (var i = 0; i < registry.length; i++) {
         var r = registry[i];
         try { r[0].removeEventListener(r[1], r[2], r[3]); } catch (e) {}
       }
       registry = [];
     };
-
-    // sessionStorage fallback — restores position if the audio element was
-    // re-created by a full page reload (i.e. Ajax page transitions off, or
-    // user opened a fresh tab on the same session).
-    var STORAGE_POS     = 'hpc-pos';
-    var STORAGE_PLAYING = 'hpc-playing';
-    var STORAGE_VOL     = 'hpc-volume';
-    var lastSavedAt     = 0;
-    var savedPlayingFlag = null;
-
-    function readStorage(key) {
-      try { return sessionStorage.getItem(key); } catch (e) { return null; }
-    }
-    function writeStorage(key, val) {
-      try { sessionStorage.setItem(key, val); } catch (e) {}
-    }
-    function savePos(force) {
-      var now = Date.now();
-      if (!force && now - lastSavedAt < 1000) return;
-      lastSavedAt = now;
-      writeStorage(STORAGE_POS, String(audio.currentTime || 0));
-      writeStorage(STORAGE_PLAYING, audio.paused ? '0' : '1');
-    }
-    function restoreFromStorage() {
-      var sp = readStorage(STORAGE_PLAYING);
-      if (sp === '1') savedPlayingFlag = true;
-      else if (sp === '0') savedPlayingFlag = false;
-
-      var savedVol = parseFloat(readStorage(STORAGE_VOL));
-      if (!isNaN(savedVol) && savedVol >= 0 && savedVol <= 1) {
-        audio.volume = savedVol;
-        audio.muted  = (savedVol === 0);
-      } else if (audio.currentTime < 0.5) {
-        audio.volume = 0.8;
-      }
-
-      var savedPos = parseFloat(readStorage(STORAGE_POS));
-      if (isNaN(savedPos) || savedPos <= 0) return;
-      // Only restore if this is a fresh element — if audio is mid-playback
-      // (Ajax transitions kept it alive) leave currentTime alone.
-      if (audio.currentTime > 0.5) return;
-      var doSeek = function () {
-        if (audio.duration && savedPos < audio.duration - 1) {
-          audio.currentTime = savedPos;
-        }
-      };
-      if (audio.readyState >= 1) doSeek();
-      else on(audio, 'loadedmetadata', doSeek, { once: true });
-    }
-    restoreFromStorage();
 
     function seekFromX(x) {
       var t = scrubber.querySelector('.cfmp-track');
@@ -442,17 +388,9 @@
       var v = Math.max(0, Math.min(100, Math.round(pct)));
       audio.volume = v / 100;
       audio.muted  = (v === 0);
-      autoMuted    = false; // explicit volume action cancels auto-mute
+      window.hpcAutoMuted = false; // explicit volume action cancels auto-mute
       setVolumeUI(v);
-      writeStorage(STORAGE_VOL, String(v / 100));
-    }
-    // Unmute the autoplay-muted stream on first interaction. Unmuting an
-    // already-playing element does NOT require a user gesture, so this works
-    // on mousemove/scroll where starting playback would not.
-    function unmuteIfNeeded() {
-      if (!autoMuted) return;
-      autoMuted = false;
-      audio.muted = (audio.volume === 0);
+      try { sessionStorage.setItem(STORAGE_VOL, String(v / 100)); } catch (e) {}
     }
     function setVolumeFromY(y) {
       var t = volScrubber.querySelector('.cfmp-vol-track');
@@ -463,38 +401,27 @@
       applyVolume(pct);
     }
 
-    // Sync UI to current audio state immediately — playback may already be
-    // running from a previous page.
+    // Reflect the engine's live state immediately — audio may already be
+    // playing from a previous page when this page's UI mounts.
     function syncFromAudio() {
-      isPlaying = !audio.paused && !audio.ended;
-      if (isPlaying) autoplayDone = true;
-      // Inherited an auto-muted stream from a previous page (playing + muted
-      // but intended volume > 0). Mark it so the next interaction unmutes.
-      if (isPlaying && audio.muted && audio.volume > 0) autoMuted = true;
-
-      var vol = (typeof audio.volume === 'number') ? audio.volume : 0.8;
+      var autoMuted = !!window.hpcAutoMuted;
       var displayMuted = audio.muted && !autoMuted; // auto-mute isn't "muted" to the user
-      setVolumeUI(displayMuted ? 0 : vol * 100);
-
+      setVolumeUI(displayMuted ? 0 : audio.volume * 100);
       if (audio.duration) {
         durEl.textContent = formatTime(audio.duration);
         setProgress((audio.currentTime / audio.duration) * 100);
       }
       curEl.textContent = formatTime(audio.currentTime || 0);
-      playSvg.innerHTML = isPlaying ? PAUSE_PATH : PLAY_PATH;
+      playSvg.innerHTML = (!audio.paused && !audio.ended) ? PAUSE_PATH : PLAY_PATH;
     }
     syncFromAudio();
 
     function openVol()  { volPop.classList.add('is-open');    volBtn.classList.add('is-open'); }
     function closeVol() { volPop.classList.remove('is-open'); volBtn.classList.remove('is-open'); }
-    function toggleVol() {
-      if (volPop.classList.contains('is-open')) closeVol();
-      else openVol();
-    }
 
     on(volBtn, 'click', function (e) {
       e.stopPropagation();
-      toggleVol();
+      if (volPop.classList.contains('is-open')) closeVol(); else openVol();
     });
     on(volPop, 'click', function (e) { e.stopPropagation(); });
     on(document, 'click', function () { closeVol(); });
@@ -522,32 +449,33 @@
     });
     on(audio, 'timeupdate', function () {
       if (!audio.duration) return;
-      setProgress((audio.currentTime / audio.duration) * 100);
+      if (!dragging) setProgress((audio.currentTime / audio.duration) * 100);
       curEl.textContent = formatTime(audio.currentTime);
-      savePos(false);
     });
     on(audio, 'ended', function () {
-      isPlaying = false;
       playSvg.innerHTML = PLAY_PATH;
       setProgress(0);
       curEl.textContent = '0:00';
-      writeStorage(STORAGE_POS, '0');
-      writeStorage(STORAGE_PLAYING, '0');
     });
-    on(audio, 'play',  function () { isPlaying = true;  playSvg.innerHTML = PAUSE_PATH; savePos(true); });
-    on(audio, 'pause', function () { isPlaying = false; playSvg.innerHTML = PLAY_PATH;  savePos(true); });
+    on(audio, 'play',  function () { playSvg.innerHTML = PAUSE_PATH; });
+    on(audio, 'pause', function () { playSvg.innerHTML = PLAY_PATH;  });
     on(audio, 'volumechange', function () {
-      var displayMuted = audio.muted && !autoMuted;
+      var displayMuted = audio.muted && !window.hpcAutoMuted;
       setVolumeUI(displayMuted ? 0 : audio.volume * 100);
     });
 
     on(playBtn, 'click', function () {
-      if (isPlaying) audio.pause();
-      else           audio.play();
+      if (!audio.paused && !audio.ended) {
+        audio.pause();
+      } else {
+        // A direct play click counts as a gesture — clear any auto-mute.
+        if (audio.muted && audio.volume > 0) { audio.muted = false; window.hpcAutoMuted = false; }
+        audio.play().catch(function () {});
+      }
     });
     on(prevBtn, 'click', function () {
       audio.currentTime = 0;
-      if (!isPlaying) audio.play();
+      if (audio.paused) audio.play().catch(function () {});
     });
     on(nextBtn, 'click', function () {
       if (audio.duration) audio.currentTime = audio.duration;
@@ -566,58 +494,6 @@
     on(scrubber, 'touchmove', function (e) {
       e.preventDefault(); seekFromX(e.touches[0].clientX);
     }, { passive: false });
-
-    function tryAutoplay() {
-      if (autoplayDone) return;
-      // Try UNMUTED first — matches the original behavior. Browsers with
-      // sufficient Media Engagement Index (Chrome's MEI) or other autoplay
-      // permission will grant this and the visitor hears sound immediately
-      // on page load and on refresh. This is the case for anyone who has
-      // played media on the domain before.
-      var p = audio.play();
-      if (!p || typeof p.then !== 'function') { autoplayDone = true; return; }
-      p.then(function () {
-        autoplayDone = true;
-      }).catch(function () {
-        // Unmuted autoplay blocked — first-time visitor with no MEI, or a
-        // strict policy. Retry MUTED (always permitted) so audio is at least
-        // playing silently; first interaction unmutes it.
-        if (audio.volume > 0) { autoMuted = true; audio.muted = true; }
-        var p2 = audio.play();
-        if (p2 && typeof p2.then === 'function') {
-          p2.then(function () { autoplayDone = true; })
-            .catch(function () {
-              autoMuted = false;
-              audio.muted = (audio.volume === 0);
-            });
-        }
-      });
-    }
-    function startOnInteraction() {
-      if (autoplayDone && !autoMuted) return; // fully started + audible
-      unmuteIfNeeded();
-      if (!autoplayDone) {
-        autoplayDone = true;
-        var p = audio.play();
-        if (p && typeof p.catch === 'function') p.catch(function () {});
-      }
-    }
-    // pointerdown + keydown are the dependable cross-browser activation
-    // signals; touchstart covers older iOS; scroll/wheel/mousemove are
-    // supplements that unmute the already-playing (muted) stream — that
-    // doesn't need a true activation gesture, so they work here.
-    ['click','touchstart','pointerdown','keydown','scroll','wheel','mousemove'].forEach(function (evt) {
-      on(window, evt, startOnInteraction, { capture: true, passive: true });
-    });
-
-    // Always attempt autoplay on attach — original behavior. Browsers that
-    // block it (iOS Safari especially) fall through to startOnInteraction.
-    if (!isPlaying) {
-      if (audio.readyState >= 2) tryAutoplay();
-      else on(audio, 'canplay', tryAutoplay, { once: true });
-    }
-
-    on(window, 'pagehide', function () { savePos(true); });
   }
 })();
 </script>
