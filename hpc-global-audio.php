@@ -60,11 +60,8 @@ add_action( 'wp_footer', function () {
 	       var MODE  = 'block';
 	       var PAGES = [];
 	     ===================================================================== */
-	  var MODE  = 'allow';
-	  var PAGES = [
-	    '/',
-	    '/front_page_june-18b_2026-2/'
-	  ];
+	  var MODE  = 'block';
+	  var PAGES = [];
 	  /* ===================== END EDIT ME ================================== */
 
 	  var SRC = 'https://honestpharmco.com/wp-content/uploads/2026/06/8D-Music-Bad-Habits-Chillout-8d-audio-for-Relaxing.mp3';
