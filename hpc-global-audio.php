@@ -6,6 +6,10 @@
  * survives Salient's AJAX page transitions and plays continuously as visitors
  * move between pages. Autoplays on every page; remembers position + volume
  * across full page reloads via sessionStorage.
+ *
+ * Note on refresh: browsers block autoplay SOUND on a fresh page load until
+ * the visitor interacts. This engine restores the saved position and starts
+ * muted; the first mouse-move / scroll / tap / click makes it audible again.
  */
 
 add_action( 'wp_footer', function () {
@@ -36,6 +40,7 @@ add_action( 'wp_footer', function () {
 
 	  window.hpcAudio     = a;
 	  window.hpcAutoMuted = false; // true only when muted to satisfy autoplay policy
+	  window.hpcStarted   = false; // true once we've achieved AUDIBLE playback
 
 	  // Restore last position once the track's length is known.
 	  var pos = parseFloat(read(STORAGE_POS));
@@ -57,21 +62,34 @@ add_action( 'wp_footer', function () {
 	    write(STORAGE_PLAYING, a.paused ? '0' : '1');
 	  });
 
-	  // --- Autoplay (unmuted first; muted fallback; unmute on interaction) --
+	  // --- Autoplay --------------------------------------------------------
+	  // Try unmuted first (works for repeat visitors with autoplay permission).
+	  // If blocked, play muted so the track is at least running; the first
+	  // gesture (below) makes it audible and resumes it if it was fully blocked.
 	  function start() {
 	    var p = a.play();
 	    if (p && typeof p.then === 'function') {
-	      p.catch(function () {
-	        if (a.volume > 0) { a.muted = true; window.hpcAutoMuted = true; }
-	        a.play().catch(function () {});
-	      });
+	      p.then(function () { window.hpcStarted = true; })
+	       .catch(function () {
+	         if (a.volume > 0) { a.muted = true; window.hpcAutoMuted = true; }
+	         a.play().catch(function () {});
+	       });
+	    } else {
+	      window.hpcStarted = true;
 	    }
 	  }
-	  function unmute() {
+
+	  // First real interaction: unmute the muted stream, and if autoplay was
+	  // blocked entirely (still paused), start it now that we have a gesture.
+	  // Once it's genuinely playing audibly we stop, so a later manual pause
+	  // by the visitor is respected and not auto-resumed.
+	  function onGesture() {
 	    if (window.hpcAutoMuted && a.muted) { a.muted = false; window.hpcAutoMuted = false; }
+	    if (a.paused && !window.hpcStarted) { a.play().catch(function () {}); }
+	    if (!a.paused && !a.muted) { window.hpcStarted = true; }
 	  }
 	  ['pointerdown','touchstart','keydown','wheel','scroll','click','mousemove'].forEach(function (evt) {
-	    window.addEventListener(evt, unmute, { capture: true, passive: true });
+	    window.addEventListener(evt, onGesture, { capture: true, passive: true });
 	  });
 
 	  if (a.readyState >= 2) start();
